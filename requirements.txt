@@ -1,3 +1,28 @@
-smartapi-python
-pyotp
-pandas
+# Angel One SmartAPI Greeks Collector Dependencies
+
+# SmartAPI SDK and dependencies
+smartapi-python>=1.5.5
+pyotp>=2.9.0
+requests>=2.31.0
+logzero>=1.7.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Scheduling
+schedule>=1.2.0
+
+# HTTP client utilities
+urllib3>=2.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# For AWS deployment
+boto3>=1.34.0  # AWS SDK
+gunicorn>=21.0.0  # WSGI server (if adding web interface)
