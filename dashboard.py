@@ -1,12 +1,12 @@
 """
-Simple monitoring dashboard for Greeks Collector
-Uses Flask for a lightweight web interface
+Flask Monitoring Dashboard with Download Feature
 """
 
-from flask import Flask, render_template_string, jsonify
-from datetime import datetime, timedelta
+from flask import Flask, render_template_string, jsonify, Response, request
+from datetime import datetime, timedelta, date
 from sqlalchemy import func, desc
-
+import csv
+import io
 from models import OptionGreeks, CollectionLog, IndexExpiry, get_session
 
 app = Flask(__name__)
@@ -18,109 +18,105 @@ DASHBOARD_HTML = """
     <title>Greeks Collector Dashboard</title>
     <meta http-equiv="refresh" content="60">
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-            background: #f5f5f5;
-        }
-        h1 { color: #333; }
-        .card {
-            background: white;
-            border-radius: 8px;
-            padding: 20px;
-            margin: 15px 0;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .status-ok { color: #28a745; }
-        .status-warn { color: #ffc107; }
-        .status-error { color: #dc3545; }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th, td {
-            padding: 10px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }
-        th { background: #f8f9fa; }
-        .metric {
-            display: inline-block;
-            padding: 20px;
-            margin: 10px;
-            background: #007bff;
-            color: white;
-            border-radius: 8px;
-            min-width: 150px;
-            text-align: center;
-        }
-        .metric-value { font-size: 2em; font-weight: bold; }
-        .metric-label { font-size: 0.9em; opacity: 0.9; }
+        body { font-family: Arial, sans-serif; margin: 20px; background: #1a1a2e; color: #eee; }
+        h1 { color: #00d4ff; }
+        h2 { color: #00d4ff; margin-top: 20px; }
+        .card { background: #16213e; padding: 20px; margin: 10px 0; border-radius: 8px; }
+        .stat { display: inline-block; margin: 10px 20px; }
+        .stat-value { font-size: 2em; color: #00d4ff; }
+        .stat-label { color: #888; }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #333; }
+        th { background: #0f3460; }
+        .success { color: #00ff88; }
+        .failed { color: #ff4444; }
+        .btn { background: #00d4ff; color: #1a1a2e; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; text-decoration: none; display: inline-block; font-weight: bold; }
+        .btn:hover { background: #00a8cc; }
+        .btn-danger { background: #ff4444; }
+        .download-section { margin: 20px 0; }
+        select, input { padding: 8px; margin: 5px; border-radius: 4px; border: 1px solid #333; background: #0f3460; color: #eee; }
+        form { display: inline; }
     </style>
 </head>
 <body>
     <h1>📊 Greeks Collector Dashboard</h1>
-    <p>Last updated: {{ now }}</p>
     
     <div class="card">
-        <h2>📈 Collection Summary (Last 24 Hours)</h2>
-        <div class="metric">
-            <div class="metric-value">{{ stats.total_records }}</div>
-            <div class="metric-label">Total Records</div>
+        <h2>Collection Stats (Last 24h)</h2>
+        <div class="stat">
+            <div class="stat-value">{{ stats.total_records }}</div>
+            <div class="stat-label">Records Collected</div>
         </div>
-        <div class="metric">
-            <div class="metric-value">{{ stats.successful_runs }}</div>
-            <div class="metric-label">Successful Runs</div>
+        <div class="stat">
+            <div class="stat-value">{{ stats.successful_runs }}</div>
+            <div class="stat-label">Successful Runs</div>
         </div>
-        <div class="metric">
-            <div class="metric-value">{{ stats.failed_runs }}</div>
-            <div class="metric-label">Failed Runs</div>
+        <div class="stat">
+            <div class="stat-value">{{ stats.failed_runs }}</div>
+            <div class="stat-label">Failed Runs</div>
         </div>
-        <div class="metric">
-            <div class="metric-value">{{ stats.avg_duration_ms }}ms</div>
-            <div class="metric-label">Avg Duration</div>
+        <div class="stat">
+            <div class="stat-value">{{ stats.avg_duration }}ms</div>
+            <div class="stat-label">Avg Duration</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">{{ stats.total_all_time }}</div>
+            <div class="stat-label">Total Records (All Time)</div>
         </div>
     </div>
     
     <div class="card">
-        <h2>📅 Tracked Expiries</h2>
+        <h2>📥 Download Data</h2>
+        <div class="download-section">
+            <h3>Quick Downloads</h3>
+            <a href="/download/today" class="btn">Today's Data (CSV)</a>
+            <a href="/download/yesterday" class="btn">Yesterday's Data (CSV)</a>
+            <a href="/download/week" class="btn">Last 7 Days (CSV)</a>
+            <a href="/download/all" class="btn">All Data (CSV)</a>
+        </div>
+        
+        <div class="download-section">
+            <h3>Custom Download</h3>
+            <form action="/download/custom" method="get">
+                <label>Underlying:</label>
+                <select name="underlying">
+                    <option value="ALL">All</option>
+                    <option value="NIFTY">NIFTY</option>
+                    <option value="BANKNIFTY">BANKNIFTY</option>
+                    <option value="FINNIFTY">FINNIFTY</option>
+                    <option value="MIDCPNIFTY">MIDCPNIFTY</option>
+                </select>
+                <label>From:</label>
+                <input type="date" name="from_date" value="{{ today }}">
+                <label>To:</label>
+                <input type="date" name="to_date" value="{{ today }}">
+                <button type="submit" class="btn">Download CSV</button>
+            </form>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h2>Tracked Expiries</h2>
         <table>
+            <tr><th>Index</th><th>Nearest Expiry</th><th>Updated</th></tr>
+            {% for exp in expiries %}
             <tr>
-                <th>Index</th>
-                <th>Nearest Expiry</th>
-                <th>Days to Expiry</th>
-                <th>Last Collection</th>
-            </tr>
-            {% for expiry in expiries %}
-            <tr>
-                <td><strong>{{ expiry.index_name }}</strong></td>
-                <td>{{ expiry.nearest_expiry }}</td>
-                <td>{{ expiry.days_to_expiry }}</td>
-                <td>{{ expiry.last_collection or 'N/A' }}</td>
+                <td>{{ exp.index_name }}</td>
+                <td>{{ exp.expiry_str }}</td>
+                <td>{{ exp.updated_at.strftime('%Y-%m-%d %H:%M') if exp.updated_at else 'N/A' }}</td>
             </tr>
             {% endfor %}
         </table>
     </div>
     
     <div class="card">
-        <h2>🔄 Recent Collection Logs</h2>
+        <h2>Recent Collection Logs</h2>
         <table>
+            <tr><th>Time</th><th>Status</th><th>Records</th><th>Duration</th></tr>
+            {% for log in logs %}
             <tr>
-                <th>Timestamp</th>
-                <th>Index</th>
-                <th>Status</th>
-                <th>Records</th>
-                <th>Duration</th>
-            </tr>
-            {% for log in recent_logs %}
-            <tr>
-                <td>{{ log.timestamp }}</td>
-                <td>{{ log.index_name }}</td>
-                <td class="status-{{ 'ok' if log.status == 'success' else 'error' }}">
-                    {{ log.status }}
-                </td>
+                <td>{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                <td class="{{ log.status }}">{{ log.status }}</td>
                 <td>{{ log.records_collected }}</td>
                 <td>{{ log.duration_ms }}ms</td>
             </tr>
@@ -129,180 +125,235 @@ DASHBOARD_HTML = """
     </div>
     
     <div class="card">
-        <h2>📊 Latest Greeks Sample (NIFTY)</h2>
+        <h2>Recent Greeks Data (Sample)</h2>
         <table>
+            <tr><th>Time</th><th>Underlying</th><th>Strike</th><th>Type</th><th>LTP</th><th>IV</th><th>Delta</th><th>OI</th></tr>
+            {% for g in greeks_sample %}
             <tr>
-                <th>Strike</th>
-                <th>Type</th>
-                <th>LTP</th>
-                <th>IV</th>
-                <th>Delta</th>
-                <th>Gamma</th>
-                <th>Theta</th>
-                <th>Vega</th>
-            </tr>
-            {% for greek in sample_greeks %}
-            <tr>
-                <td>{{ greek.strike_price }}</td>
-                <td>{{ greek.option_type }}</td>
-                <td>{{ greek.ltp }}</td>
-                <td>{{ greek.implied_volatility }}</td>
-                <td>{{ greek.delta }}</td>
-                <td>{{ greek.gamma }}</td>
-                <td>{{ greek.theta }}</td>
-                <td>{{ greek.vega }}</td>
+                <td>{{ g.timestamp.strftime('%H:%M:%S') }}</td>
+                <td>{{ g.underlying }}</td>
+                <td>{{ g.strike_price }}</td>
+                <td>{{ g.option_type }}</td>
+                <td>{{ "%.2f"|format(g.ltp) if g.ltp else 'N/A' }}</td>
+                <td>{{ "%.2f"|format(g.implied_volatility) if g.implied_volatility else 'N/A' }}</td>
+                <td>{{ "%.4f"|format(g.delta) if g.delta else 'N/A' }}</td>
+                <td>{{ g.open_interest }}</td>
             </tr>
             {% endfor %}
         </table>
     </div>
+    
+    <p style="color:#666">Last updated: {{ now }} | Auto-refresh: 60s</p>
 </body>
 </html>
 """
 
-
 @app.route('/')
 def dashboard():
-    """Main dashboard view"""
     session = get_session()
-    now = datetime.now()
-    yesterday = now - timedelta(days=1)
-    
     try:
-        # Get collection stats for last 24 hours
-        stats_query = session.query(
-            func.sum(CollectionLog.records_collected).label('total_records'),
-            func.count(CollectionLog.id).filter(CollectionLog.status == 'success').label('successful'),
-            func.count(CollectionLog.id).filter(CollectionLog.status == 'failed').label('failed'),
-            func.avg(CollectionLog.duration_ms).label('avg_duration')
-        ).filter(CollectionLog.timestamp >= yesterday).first()
+        since = datetime.now() - timedelta(hours=24)
+        
+        logs = session.query(CollectionLog).filter(
+            CollectionLog.timestamp >= since
+        ).order_by(desc(CollectionLog.timestamp)).limit(50).all()
+        
+        successful = len([l for l in logs if l.status == 'success'])
+        failed = len([l for l in logs if l.status == 'failed'])
+        total_records = sum(l.records_collected or 0 for l in logs)
+        avg_duration = sum(l.duration_ms or 0 for l in logs) // len(logs) if logs else 0
+        
+        total_all_time = session.query(func.count(OptionGreeks.id)).scalar() or 0
+        
+        expiries = session.query(IndexExpiry).all()
+        
+        greeks_sample = session.query(OptionGreeks).order_by(desc(OptionGreeks.timestamp)).limit(10).all()
         
         stats = {
-            'total_records': stats_query.total_records or 0,
-            'successful_runs': stats_query.successful or 0,
-            'failed_runs': stats_query.failed or 0,
-            'avg_duration_ms': round(stats_query.avg_duration or 0, 1)
+            'total_records': total_records,
+            'successful_runs': successful,
+            'failed_runs': failed,
+            'avg_duration': avg_duration,
+            'total_all_time': total_all_time
         }
-        
-        # Get tracked expiries
-        expiries_raw = session.query(IndexExpiry).all()
-        expiries = []
-        for exp in expiries_raw:
-            days_to_expiry = (exp.nearest_expiry - now.date()).days if exp.nearest_expiry else 'N/A'
-            
-            # Get last collection for this index
-            last_log = session.query(CollectionLog).filter(
-                CollectionLog.index_name == exp.index_name,
-                CollectionLog.status == 'success'
-            ).order_by(desc(CollectionLog.timestamp)).first()
-            
-            expiries.append({
-                'index_name': exp.index_name,
-                'nearest_expiry': exp.nearest_expiry.strftime('%d %b %Y') if exp.nearest_expiry else 'N/A',
-                'days_to_expiry': days_to_expiry,
-                'last_collection': last_log.timestamp.strftime('%H:%M:%S') if last_log else None
-            })
-        
-        # Get recent collection logs
-        recent_logs = session.query(CollectionLog).order_by(
-            desc(CollectionLog.timestamp)
-        ).limit(20).all()
-        
-        logs_formatted = [{
-            'timestamp': log.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-            'index_name': log.index_name,
-            'status': log.status,
-            'records_collected': log.records_collected,
-            'duration_ms': log.duration_ms
-        } for log in recent_logs]
-        
-        # Get sample Greeks data
-        sample_greeks = session.query(OptionGreeks).filter(
-            OptionGreeks.underlying == 'NIFTY'
-        ).order_by(desc(OptionGreeks.timestamp)).limit(10).all()
-        
-        greeks_formatted = [{
-            'strike_price': g.strike_price,
-            'option_type': g.option_type,
-            'ltp': round(g.ltp, 2) if g.ltp else '-',
-            'implied_volatility': round(g.implied_volatility, 2) if g.implied_volatility else '-',
-            'delta': round(g.delta, 4) if g.delta else '-',
-            'gamma': round(g.gamma, 6) if g.gamma else '-',
-            'theta': round(g.theta, 4) if g.theta else '-',
-            'vega': round(g.vega, 4) if g.vega else '-'
-        } for g in sample_greeks]
         
         return render_template_string(
             DASHBOARD_HTML,
-            now=now.strftime('%Y-%m-%d %H:%M:%S'),
             stats=stats,
             expiries=expiries,
-            recent_logs=logs_formatted,
-            sample_greeks=greeks_formatted
+            logs=logs[:10],
+            greeks_sample=greeks_sample,
+            now=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            today=date.today().isoformat()
         )
-        
     finally:
         session.close()
 
+def generate_csv(query_results):
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow([
+        'timestamp', 'underlying', 'expiry_date', 'strike_price', 
+        'option_type', 'symbol', 'ltp', 'implied_volatility',
+        'delta', 'gamma', 'theta', 'vega', 'open_interest', 'volume'
+    ])
+    
+    # Data
+    for r in query_results:
+        writer.writerow([
+            r.timestamp.isoformat() if r.timestamp else '',
+            r.underlying,
+            r.expiry_date.isoformat() if r.expiry_date else '',
+            r.strike_price,
+            r.option_type,
+            r.symbol,
+            r.ltp,
+            r.implied_volatility,
+            r.delta,
+            r.gamma,
+            r.theta,
+            r.vega,
+            r.open_interest,
+            r.volume
+        ])
+    
+    return output.getvalue()
+
+@app.route('/download/today')
+def download_today():
+    session = get_session()
+    try:
+        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        records = session.query(OptionGreeks).filter(
+            OptionGreeks.timestamp >= today_start
+        ).order_by(OptionGreeks.timestamp).all()
+        
+        csv_data = generate_csv(records)
+        filename = f"greeks_today_{date.today().isoformat()}.csv"
+        
+        return Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename={filename}'}
+        )
+    finally:
+        session.close()
+
+@app.route('/download/yesterday')
+def download_yesterday():
+    session = get_session()
+    try:
+        yesterday = date.today() - timedelta(days=1)
+        yesterday_start = datetime.combine(yesterday, datetime.min.time())
+        yesterday_end = datetime.combine(yesterday, datetime.max.time())
+        
+        records = session.query(OptionGreeks).filter(
+            OptionGreeks.timestamp >= yesterday_start,
+            OptionGreeks.timestamp <= yesterday_end
+        ).order_by(OptionGreeks.timestamp).all()
+        
+        csv_data = generate_csv(records)
+        filename = f"greeks_{yesterday.isoformat()}.csv"
+        
+        return Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename={filename}'}
+        )
+    finally:
+        session.close()
+
+@app.route('/download/week')
+def download_week():
+    session = get_session()
+    try:
+        week_ago = datetime.now() - timedelta(days=7)
+        records = session.query(OptionGreeks).filter(
+            OptionGreeks.timestamp >= week_ago
+        ).order_by(OptionGreeks.timestamp).all()
+        
+        csv_data = generate_csv(records)
+        filename = f"greeks_last_7_days_{date.today().isoformat()}.csv"
+        
+        return Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename={filename}'}
+        )
+    finally:
+        session.close()
+
+@app.route('/download/all')
+def download_all():
+    session = get_session()
+    try:
+        records = session.query(OptionGreeks).order_by(OptionGreeks.timestamp).all()
+        
+        csv_data = generate_csv(records)
+        filename = f"greeks_all_data_{date.today().isoformat()}.csv"
+        
+        return Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename={filename}'}
+        )
+    finally:
+        session.close()
+
+@app.route('/download/custom')
+def download_custom():
+    session = get_session()
+    try:
+        underlying = request.args.get('underlying', 'ALL')
+        from_date = request.args.get('from_date', date.today().isoformat())
+        to_date = request.args.get('to_date', date.today().isoformat())
+        
+        from_dt = datetime.fromisoformat(from_date)
+        to_dt = datetime.fromisoformat(to_date).replace(hour=23, minute=59, second=59)
+        
+        query = session.query(OptionGreeks).filter(
+            OptionGreeks.timestamp >= from_dt,
+            OptionGreeks.timestamp <= to_dt
+        )
+        
+        if underlying != 'ALL':
+            query = query.filter(OptionGreeks.underlying == underlying)
+        
+        records = query.order_by(OptionGreeks.timestamp).all()
+        
+        csv_data = generate_csv(records)
+        filename = f"greeks_{underlying}_{from_date}_to_{to_date}.csv"
+        
+        return Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename={filename}'}
+        )
+    finally:
+        session.close()
+
+@app.route('/api/health')
+def health():
+    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
 
 @app.route('/api/stats')
 def api_stats():
-    """API endpoint for stats"""
     session = get_session()
-    now = datetime.now()
-    yesterday = now - timedelta(days=1)
-    
     try:
-        # Get collection stats
-        stats = session.query(
-            func.sum(CollectionLog.records_collected).label('total_records'),
-            func.count(CollectionLog.id).filter(CollectionLog.status == 'success').label('successful'),
-            func.count(CollectionLog.id).filter(CollectionLog.status == 'failed').label('failed')
-        ).filter(CollectionLog.timestamp >= yesterday).first()
-        
+        since = datetime.now() - timedelta(hours=24)
+        total_24h = session.query(func.count(OptionGreeks.id)).filter(
+            OptionGreeks.timestamp >= since
+        ).scalar()
+        total_all = session.query(func.count(OptionGreeks.id)).scalar()
         return jsonify({
-            'status': 'ok',
-            'timestamp': now.isoformat(),
-            'stats': {
-                'total_records_24h': stats.total_records or 0,
-                'successful_runs': stats.successful or 0,
-                'failed_runs': stats.failed or 0
-            }
+            'records_24h': total_24h,
+            'records_all_time': total_all,
+            'timestamp': datetime.now().isoformat()
         })
     finally:
         session.close()
-
-
-@app.route('/api/health')
-def health_check():
-    """Health check endpoint"""
-    session = get_session()
-    
-    try:
-        # Check database connectivity
-        session.execute("SELECT 1")
-        
-        # Check last collection time
-        last_log = session.query(CollectionLog).order_by(
-            desc(CollectionLog.timestamp)
-        ).first()
-        
-        last_collection = None
-        if last_log:
-            last_collection = last_log.timestamp.isoformat()
-        
-        return jsonify({
-            'status': 'healthy',
-            'database': 'connected',
-            'last_collection': last_collection
-        })
-    except Exception as e:
-        return jsonify({
-            'status': 'unhealthy',
-            'error': str(e)
-        }), 500
-    finally:
-        session.close()
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
