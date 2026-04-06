@@ -4,9 +4,9 @@ Uses PostgreSQL with SQLAlchemy ORM
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Float, DateTime, 
+    create_engine, Column, Integer, String, Float, DateTime,
     Date, BigInteger, Index, Text, Boolean
 )
 from sqlalchemy.ext.declarative import declarative_base
@@ -23,8 +23,8 @@ class Instrument(Base):
     __tablename__ = 'instruments'
     
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    token = Column(String(20), index=True)
-    symbol = Column(String(100), index=True)
+    token = Column(String(50), index=True)
+    symbol = Column(String(200), index=True)
     name = Column(String(100), index=True)
     expiry = Column(Date, nullable=True, index=True)
     strike = Column(Float, nullable=True)
@@ -32,8 +32,8 @@ class Instrument(Base):
     instrumenttype = Column(String(20), index=True)
     exch_seg = Column(String(10), index=True)
     tick_size = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
     __table_args__ = (
         Index('idx_instrument_lookup', 'symbol', 'exch_seg'),
@@ -49,8 +49,8 @@ class IndexExpiry(Base):
     index_name = Column(String(50), index=True)
     nearest_expiry = Column(Date, index=True)
     expiry_type = Column(String(20))  # weekly, monthly
-    updated_at = Column(DateTime, default=datetime.utcnow)
-    
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
     __table_args__ = (
         Index('idx_index_expiry', 'index_name', 'nearest_expiry'),
     )
@@ -61,7 +61,7 @@ class OptionGreeks(Base):
     __tablename__ = 'option_greeks'
     
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, index=True, default=datetime.utcnow)
+    timestamp = Column(DateTime, index=True, default=lambda: datetime.now(timezone.utc))
     underlying = Column(String(50), index=True)
     expiry_date = Column(Date, index=True)
     strike_price = Column(Float, index=True)
@@ -98,7 +98,7 @@ class CollectionLog(Base):
     __tablename__ = 'collection_logs'
     
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     index_name = Column(String(50))
     expiry_date = Column(Date)
     status = Column(String(20))  # success, failed, partial
@@ -115,7 +115,7 @@ class SessionToken(Base):
     jwt_token = Column(Text)
     refresh_token = Column(Text)
     feed_token = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     expires_at = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True)
 
@@ -128,8 +128,12 @@ def get_database_url():
     )
 
 
+_engine = None
+_Session = None
+
+
 def create_db_engine():
-    """Create SQLAlchemy engine with connection pooling"""
+    """Create SQLAlchemy engine with connection pooling (called once)."""
     return create_engine(
         get_database_url(),
         poolclass=QueuePool,
@@ -140,19 +144,28 @@ def create_db_engine():
     )
 
 
+def _get_engine():
+    """Return the shared engine, creating it once."""
+    global _engine
+    if _engine is None:
+        _engine = create_db_engine()
+    return _engine
+
+
 def init_database():
     """Initialize database tables"""
-    engine = create_db_engine()
+    engine = _get_engine()
     Base.metadata.create_all(engine)
     print("Database tables created successfully!")
     return engine
 
 
 def get_session():
-    """Get a new database session"""
-    engine = create_db_engine()
-    Session = sessionmaker(bind=engine)
-    return Session()
+    """Get a new database session using the shared engine."""
+    global _Session
+    if _Session is None:
+        _Session = sessionmaker(bind=_get_engine())
+    return _Session()
 
 
 if __name__ == "__main__":

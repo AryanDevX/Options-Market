@@ -1,2 +1,19 @@
+# Credentials - never commit
 config.py
 key_pair.pem
+*.pem
+*.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs and runtime files
+*.log
+logs/
+*.pid
+
+# OS
+.DS_Store

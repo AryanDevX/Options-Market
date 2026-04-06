@@ -8,7 +8,7 @@ import logging
 import time
 import signal
 import sys
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Optional
 import schedule
 from threading import Thread, Event
@@ -129,41 +129,39 @@ class GreeksCollector:
                 expiry_date = datetime.strptime(expiry_str, '%d%b%Y').date()
             except ValueError:
                 expiry_date = date.today()
-            
-            timestamp = datetime.utcnow()
-            
-            # Process each strike/option
+
+            timestamp = datetime.now(timezone.utc)
+
+            # API returns a flat list: one row per option (each has optionType CE or PE)
             for item in greeks_data:
                 try:
-                    # Handle both CE and PE in the response
-                    for option_type in ['CE', 'PE']:
-                        option_data = item.get(option_type, {})
-                        if not option_data:
-                            continue
-                        
-                        greek = OptionGreeks(
-                            timestamp=timestamp,
-                            underlying=index_name,
-                            expiry_date=expiry_date,
-                            strike_price=float(item.get('strikePrice', 0)),
-                            option_type=option_type,
-                            token=str(option_data.get('token', '')),
-                            symbol=str(option_data.get('symbol', '')),
-                            delta=self._safe_float(option_data.get('delta')),
-                            gamma=self._safe_float(option_data.get('gamma')),
-                            theta=self._safe_float(option_data.get('theta')),
-                            vega=self._safe_float(option_data.get('vega')),
-                            implied_volatility=self._safe_float(option_data.get('iv')),
-                            ltp=self._safe_float(option_data.get('ltp')),
-                            open_interest=self._safe_int(option_data.get('oi')),
-                            volume=self._safe_int(option_data.get('volume')),
-                            bid_price=self._safe_float(option_data.get('bidPrice')),
-                            ask_price=self._safe_float(option_data.get('askPrice')),
-                            raw_response=json.dumps(item) if records_collected < 5 else None
-                        )
-                        session.add(greek)
-                        records_collected += 1
-                        
+                    option_type = str(item.get('optionType', '')).upper()
+                    if option_type not in ('CE', 'PE'):
+                        continue
+
+                    greek = OptionGreeks(
+                        timestamp=timestamp,
+                        underlying=index_name,
+                        expiry_date=expiry_date,
+                        strike_price=self._safe_float(item.get('strikePrice')),
+                        option_type=option_type,
+                        token=None,
+                        symbol=None,
+                        delta=self._safe_float(item.get('delta')),
+                        gamma=self._safe_float(item.get('gamma')),
+                        theta=self._safe_float(item.get('theta')),
+                        vega=self._safe_float(item.get('vega')),
+                        implied_volatility=self._safe_float(item.get('impliedVolatility')),
+                        ltp=None,
+                        open_interest=None,
+                        volume=self._safe_int(item.get('tradeVolume')),
+                        bid_price=None,
+                        ask_price=None,
+                        raw_response=json.dumps(item) if records_collected < 5 else None
+                    )
+                    session.add(greek)
+                    records_collected += 1
+
                 except Exception as e:
                     logger.debug(f"Error processing item: {e}")
                     continue
@@ -240,7 +238,7 @@ class GreeksCollector:
         for index_name, expiry_str in self.index_expiries.items():
             records = self.collect_greeks_for_index(index_name, expiry_str)
             total_records += records
-            time.sleep(0.5)  # Small delay between API calls
+            time.sleep(2.5)  # Delay to avoid API rate-limit throttling
         
         logger.info(f"Collection cycle complete. Total records: {total_records}")
     

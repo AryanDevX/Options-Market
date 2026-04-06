@@ -5,22 +5,18 @@ Wants=postgresql.service
 
 [Service]
 Type=simple
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=/home/ubuntu/angelone_greeks_collector
-Environment="PATH=/home/ubuntu/angelone_greeks_collector/venv/bin"
-ExecStart=/home/ubuntu/angelone_greeks_collector/venv/bin/python greeks_collector.py
+User=zenith
+Group=zenith
+WorkingDirectory=/mnt/new_volume/Documents/Coding/Projects/Trading/github
+Environment="PATH=/mnt/new_volume/Documents/Coding/Projects/Trading/github/venv/bin"
+ExecStart=/mnt/new_volume/Documents/Coding/Projects/Trading/github/venv/bin/python greeks_collector.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 
-# Hardening
 NoNewPrivileges=yes
 PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/home/ubuntu/angelone_greeks_collector
 
 [Install]
 WantedBy=multi-user.target

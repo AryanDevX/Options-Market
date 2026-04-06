@@ -6,7 +6,7 @@ Finds nearest expiry for indices
 
 import json
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -16,6 +16,9 @@ from models import Instrument, IndexExpiry, get_session
 from config import INDICES_TO_TRACK
 
 logger = logging.getLogger(__name__)
+
+# NFO = NSE F&O; BFO = BSE F&O (SENSEX, BANKEX index options).
+_INDEX_OPTION_SEGMENTS = ("NFO", "BFO")
 
 
 class InstrumentManager:
@@ -125,7 +128,7 @@ class InstrumentManager:
         # Filter for index options (NFO segment, OPTIDX instrument type)
         options_df = self.instruments_df[
             (self.instruments_df['name'] == index_name) &
-            (self.instruments_df['exch_seg'] == 'NFO') &
+            (self.instruments_df['exch_seg'].isin(_INDEX_OPTION_SEGMENTS)) &
             (self.instruments_df['instrumenttype'] == 'OPTIDX')
         ].copy()
         
@@ -182,7 +185,7 @@ class InstrumentManager:
         # Filter for index options
         options_df = self.instruments_df[
             (self.instruments_df['name'] == index_name) &
-            (self.instruments_df['exch_seg'] == 'NFO') &
+            (self.instruments_df['exch_seg'].isin(_INDEX_OPTION_SEGMENTS)) &
             (self.instruments_df['instrumenttype'] == 'OPTIDX')
         ].copy()
         
@@ -228,7 +231,7 @@ class InstrumentManager:
                     
                     if existing:
                         existing.nearest_expiry = expiry_date
-                        existing.updated_at = datetime.utcnow()
+                        existing.updated_at = datetime.now(timezone.utc)
                     else:
                         new_expiry = IndexExpiry(
                             index_name=index_name,
@@ -275,7 +278,7 @@ class InstrumentManager:
         # Filter options for this index and expiry
         options = self.instruments_df[
             (self.instruments_df['name'] == index_name) &
-            (self.instruments_df['exch_seg'] == 'NFO') &
+            (self.instruments_df['exch_seg'].isin(_INDEX_OPTION_SEGMENTS)) &
             (self.instruments_df['instrumenttype'] == 'OPTIDX') &
             (self.instruments_df['expiry'] == expiry_str)
         ].copy()

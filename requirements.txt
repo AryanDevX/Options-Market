@@ -1,7 +1,11 @@
 # Angel One SmartAPI Greeks Collector Dependencies
 
+# Web dashboard
+flask>=3.0.0
+
 # SmartAPI SDK and dependencies
 smartapi-python>=1.5.5
+websocket-client>=1.6.0
 pyotp>=2.9.0
 requests>=2.31.0
 logzero>=1.7.0

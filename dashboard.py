@@ -102,7 +102,7 @@ DASHBOARD_HTML = """
             {% for exp in expiries %}
             <tr>
                 <td>{{ exp.index_name }}</td>
-                <td>{{ exp.expiry_str }}</td>
+                <td>{{ exp.nearest_expiry.strftime('%d%b%Y') if exp.nearest_expiry else 'N/A' }}</td>
                 <td>{{ exp.updated_at.strftime('%Y-%m-%d %H:%M') if exp.updated_at else 'N/A' }}</td>
             </tr>
             {% endfor %}
@@ -161,7 +161,7 @@ def dashboard():
         successful = len([l for l in logs if l.status == 'success'])
         failed = len([l for l in logs if l.status == 'failed'])
         total_records = sum(l.records_collected or 0 for l in logs)
-        avg_duration = sum(l.duration_ms or 0 for l in logs) // len(logs) if logs else 0
+        avg_duration = round(sum(l.duration_ms or 0 for l in logs) / len(logs)) if logs else 0
         
         total_all_time = session.query(func.count(OptionGreeks.id)).scalar() or 0
         
