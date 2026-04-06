@@ -164,7 +164,7 @@ DASHBOARD_HTML = """
 def dashboard():
     session = get_session()
     try:
-        since = datetime.now(timezone.utc) - timedelta(hours=24)
+        since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
         
         logs = session.query(CollectionLog).filter(
             CollectionLog.timestamp >= since
@@ -195,7 +195,7 @@ def dashboard():
             expiries=expiries,
             logs=logs[:10],
             greeks_sample=greeks_sample,
-            now=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            now=to_ist(datetime.now(timezone.utc)).strftime('%Y-%m-%d %H:%M:%S'),
             today=date.today().isoformat()
         )
     finally:
@@ -237,7 +237,7 @@ def generate_csv(query_results):
 def download_today():
     session = get_session()
     try:
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = datetime.now(timezone.utc).replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
         records = session.query(OptionGreeks).filter(
             OptionGreeks.timestamp >= today_start
         ).order_by(OptionGreeks.timestamp).all()
@@ -281,7 +281,7 @@ def download_yesterday():
 def download_week():
     session = get_session()
     try:
-        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        week_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
         records = session.query(OptionGreeks).filter(
             OptionGreeks.timestamp >= week_ago
         ).order_by(OptionGreeks.timestamp).all()
@@ -354,7 +354,7 @@ def health():
 def api_stats():
     session = get_session()
     try:
-        since = datetime.now(timezone.utc) - timedelta(hours=24)
+        since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
         total_24h = session.query(func.count(OptionGreeks.id)).filter(
             OptionGreeks.timestamp >= since
         ).scalar()
