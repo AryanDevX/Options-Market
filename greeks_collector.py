@@ -246,8 +246,8 @@ class GreeksCollector:
         """Refresh expiry information - run daily"""
         logger.info("Refreshing expiry information...")
         
-        # Re-download instruments
-        self.instrument_manager.download_and_store_instruments()
+        # Force re-download instruments (daily refresh)
+        self.instrument_manager.download_and_store_instruments(force=True)
         
         # Update expiries
         self.index_expiries = self.instrument_manager.update_index_expiries_in_db()

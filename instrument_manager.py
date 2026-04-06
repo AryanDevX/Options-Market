@@ -23,49 +23,99 @@ _INDEX_OPTION_SEGMENTS = ("NFO", "BFO")
 
 class InstrumentManager:
     """Manages instrument data and expiry calculations"""
-    
+
     def __init__(self):
         self.client = get_client()
         self.instruments_df: Optional[pd.DataFrame] = None
-    
-    def download_and_store_instruments(self) -> int:
+
+    def _is_db_fresh(self) -> bool:
+        """Return True if instruments were already downloaded today."""
+        session = get_session()
+        try:
+            latest = session.query(Instrument.created_at).order_by(
+                Instrument.created_at.desc()
+            ).first()
+            if latest and latest[0]:
+                last_date = latest[0].date() if hasattr(latest[0], 'date') else latest[0]
+                return last_date >= datetime.now().date()
+            return False
+        except Exception:
+            return False
+        finally:
+            session.close()
+
+    def _load_from_db(self) -> int:
+        """Load instruments from DB into in-memory DataFrame. Returns row count."""
+        logger.info("Loading instruments from database...")
+        session = get_session()
+        try:
+            rows = session.query(
+                Instrument.token, Instrument.symbol, Instrument.name,
+                Instrument.expiry, Instrument.strike, Instrument.lotsize,
+                Instrument.instrumenttype, Instrument.exch_seg, Instrument.tick_size
+            ).all()
+
+            if not rows:
+                return 0
+
+            self.instruments_df = pd.DataFrame(rows, columns=[
+                'token', 'symbol', 'name', 'expiry', 'strike',
+                'lotsize', 'instrumenttype', 'exch_seg', 'tick_size'
+            ])
+            # expiry column is already a date object from DB; convert to Timestamp for filtering
+            self.instruments_df['expiry_parsed'] = pd.to_datetime(
+                self.instruments_df['expiry'], errors='coerce'
+            )
+            logger.info(f"Loaded {len(self.instruments_df)} instruments from database")
+            return len(self.instruments_df)
+        except Exception as e:
+            logger.error(f"Error loading instruments from DB: {e}")
+            return 0
+        finally:
+            session.close()
+
+    def download_and_store_instruments(self, force: bool = False) -> int:
         """
-        Download all instruments and store in database
-        Returns count of instruments stored
+        Download instruments from Angel One and store in DB.
+        Skips download if instruments were already fetched today (unless force=True).
+        Returns count of instruments available.
         """
-        logger.info("Downloading instrument master...")
-        
+        if not force and self._is_db_fresh():
+            logger.info("Instruments already downloaded today — loading from database")
+            if self.instruments_df is None:
+                return self._load_from_db()
+            return len(self.instruments_df)
+
+        logger.info("Downloading instrument master from Angel One...")
         instruments = self.client.download_instruments()
-        
+
         if not instruments:
             logger.error("Failed to download instruments")
-            return 0
-        
-        # Convert to DataFrame for easier processing
+            # Fall back to DB if available
+            return self._load_from_db()
+
+        # Build in-memory DataFrame
         self.instruments_df = pd.DataFrame(instruments)
-        
-        # Parse expiry dates
         self.instruments_df['expiry_parsed'] = pd.to_datetime(
-            self.instruments_df['expiry'], 
+            self.instruments_df['expiry'],
             format='%d%b%Y',
             errors='coerce'
         )
-        
-        # Store in database
+
+        # Persist to database
         session = get_session()
         try:
-            # Clear existing instruments (fresh download)
             session.query(Instrument).delete()
-            
+
             count = 0
             batch_size = 5000
             batch = []
-            
+
             for _, row in self.instruments_df.iterrows():
                 expiry_date = None
                 if pd.notna(row.get('expiry_parsed')):
                     expiry_date = row['expiry_parsed'].date()
-                
+
                 instrument = Instrument(
                     token=str(row.get('token', '')),
                     symbol=str(row.get('symbol', '')),
@@ -78,26 +128,24 @@ class InstrumentManager:
                     tick_size=float(row['tick_size']) if pd.notna(row.get('tick_size')) else None
                 )
                 batch.append(instrument)
-                
+
                 if len(batch) >= batch_size:
                     session.bulk_save_objects(batch)
                     session.commit()
                     count += len(batch)
                     batch = []
-                    logger.info(f"Stored {count} instruments...")
-            
-            # Store remaining
+
             if batch:
                 session.bulk_save_objects(batch)
                 session.commit()
                 count += len(batch)
-            
+
             logger.info(f"Successfully stored {count} instruments")
             return count
-            
+
         except Exception as e:
             session.rollback()
-            logger.error(f"Error storing instruments: {str(e)}")
+            logger.error(f"Error storing instruments: {e}")
             return 0
         finally:
             session.close()
@@ -113,18 +161,11 @@ class InstrumentManager:
             Tuple of (expiry_date, formatted_expiry_string) or None
         """
         if self.instruments_df is None:
-            instruments = self.client.download_instruments()
-            if instruments:
-                self.instruments_df = pd.DataFrame(instruments)
-                self.instruments_df['expiry_parsed'] = pd.to_datetime(
-                    self.instruments_df['expiry'], 
-                    format='%d%b%Y',
-                    errors='coerce'
-                )
-        
+            self._load_from_db()
+
         if self.instruments_df is None:
             return None
-        
+
         # Filter for index options (NFO segment, OPTIDX instrument type)
         options_df = self.instruments_df[
             (self.instruments_df['name'] == index_name) &
@@ -170,15 +211,8 @@ class InstrumentManager:
             List of (expiry_date, formatted_string) tuples
         """
         if self.instruments_df is None:
-            instruments = self.client.download_instruments()
-            if instruments:
-                self.instruments_df = pd.DataFrame(instruments)
-                self.instruments_df['expiry_parsed'] = pd.to_datetime(
-                    self.instruments_df['expiry'], 
-                    format='%d%b%Y',
-                    errors='coerce'
-                )
-        
+            self._load_from_db()
+
         if self.instruments_df is None:
             return []
         
