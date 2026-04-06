@@ -3,13 +3,25 @@ Flask Monitoring Dashboard with Download Feature
 """
 
 from flask import Flask, render_template_string, jsonify, Response, request
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from sqlalchemy import func, desc
 import csv
 import io
 from models import OptionGreeks, CollectionLog, IndexExpiry, get_session
 
 app = Flask(__name__)
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def to_ist(dt):
+    """Convert a naive UTC datetime from DB to IST."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IST)
+
+app.jinja_env.filters['ist'] = to_ist
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -103,7 +115,7 @@ DASHBOARD_HTML = """
             <tr>
                 <td>{{ exp.index_name }}</td>
                 <td>{{ exp.nearest_expiry.strftime('%d%b%Y') if exp.nearest_expiry else 'N/A' }}</td>
-                <td>{{ exp.updated_at.strftime('%Y-%m-%d %H:%M') if exp.updated_at else 'N/A' }}</td>
+                <td>{{ (exp.updated_at|ist).strftime('%Y-%m-%d %H:%M IST') if exp.updated_at else 'N/A' }}</td>
             </tr>
             {% endfor %}
         </table>
@@ -115,7 +127,7 @@ DASHBOARD_HTML = """
             <tr><th>Time</th><th>Status</th><th>Records</th><th>Duration</th></tr>
             {% for log in logs %}
             <tr>
-                <td>{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                <td>{{ (log.timestamp|ist).strftime('%Y-%m-%d %H:%M:%S IST') }}</td>
                 <td class="{{ log.status }}">{{ log.status }}</td>
                 <td>{{ log.records_collected }}</td>
                 <td>{{ log.duration_ms }}ms</td>
@@ -130,7 +142,7 @@ DASHBOARD_HTML = """
             <tr><th>Time</th><th>Underlying</th><th>Strike</th><th>Type</th><th>LTP</th><th>IV</th><th>Delta</th><th>OI</th></tr>
             {% for g in greeks_sample %}
             <tr>
-                <td>{{ g.timestamp.strftime('%H:%M:%S') }}</td>
+                <td>{{ (g.timestamp|ist).strftime('%H:%M:%S IST') }}</td>
                 <td>{{ g.underlying }}</td>
                 <td>{{ g.strike_price }}</td>
                 <td>{{ g.option_type }}</td>
@@ -143,7 +155,7 @@ DASHBOARD_HTML = """
         </table>
     </div>
     
-    <p style="color:#666">Last updated: {{ now }} | Auto-refresh: 60s</p>
+    <p style="color:#666">Last updated: {{ now }} IST | Auto-refresh: 60s</p>
 </body>
 </html>
 """
@@ -152,7 +164,7 @@ DASHBOARD_HTML = """
 def dashboard():
     session = get_session()
     try:
-        since = datetime.now() - timedelta(hours=24)
+        since = datetime.now(timezone.utc) - timedelta(hours=24)
         
         logs = session.query(CollectionLog).filter(
             CollectionLog.timestamp >= since
@@ -225,7 +237,7 @@ def generate_csv(query_results):
 def download_today():
     session = get_session()
     try:
-        today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         records = session.query(OptionGreeks).filter(
             OptionGreeks.timestamp >= today_start
         ).order_by(OptionGreeks.timestamp).all()
@@ -269,7 +281,7 @@ def download_yesterday():
 def download_week():
     session = get_session()
     try:
-        week_ago = datetime.now() - timedelta(days=7)
+        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
         records = session.query(OptionGreeks).filter(
             OptionGreeks.timestamp >= week_ago
         ).order_by(OptionGreeks.timestamp).all()
@@ -342,7 +354,7 @@ def health():
 def api_stats():
     session = get_session()
     try:
-        since = datetime.now() - timedelta(hours=24)
+        since = datetime.now(timezone.utc) - timedelta(hours=24)
         total_24h = session.query(func.count(OptionGreeks.id)).filter(
             OptionGreeks.timestamp >= since
         ).scalar()
