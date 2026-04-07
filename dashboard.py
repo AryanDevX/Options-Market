@@ -2,7 +2,7 @@
 Flask Monitoring Dashboard with Download Feature
 """
 
-from flask import Flask, render_template_string, jsonify, Response, request
+from flask import Flask, render_template_string, jsonify, Response, request, stream_with_context
 from datetime import datetime, timedelta, date, timezone
 from sqlalchemy import func, desc
 import csv
@@ -201,150 +201,104 @@ def dashboard():
     finally:
         session.close()
 
-def generate_csv(query_results):
-    output = io.StringIO()
-    writer = csv.writer(output)
-    
-    # Header
-    writer.writerow([
-        'timestamp', 'underlying', 'expiry_date', 'strike_price', 
-        'option_type', 'symbol', 'ltp', 'implied_volatility',
-        'delta', 'gamma', 'theta', 'vega', 'open_interest', 'volume'
-    ])
-    
-    # Data
-    for r in query_results:
-        writer.writerow([
-            r.timestamp.isoformat() if r.timestamp else '',
-            r.underlying,
-            r.expiry_date.isoformat() if r.expiry_date else '',
-            r.strike_price,
-            r.option_type,
-            r.symbol,
-            r.ltp,
-            r.implied_volatility,
-            r.delta,
-            r.gamma,
-            r.theta,
-            r.vega,
-            r.open_interest,
-            r.volume
-        ])
-    
-    return output.getvalue()
+CSV_HEADER = [
+    'timestamp_ist', 'underlying', 'expiry_date', 'strike_price',
+    'option_type', 'implied_volatility', 'delta', 'gamma', 'theta', 'vega',
+    'volume'
+]
+
+def stream_csv(query, filename):
+    """Stream CSV rows directly from DB query — never loads all rows into RAM."""
+    def generate():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(CSV_HEADER)
+        yield buf.getvalue()
+
+        for r in query.yield_per(500):
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            ts_ist = to_ist(r.timestamp).strftime('%Y-%m-%d %H:%M:%S') if r.timestamp else ''
+            writer.writerow([
+                ts_ist,
+                r.underlying,
+                r.expiry_date.isoformat() if r.expiry_date else '',
+                r.strike_price,
+                r.option_type,
+                r.implied_volatility,
+                r.delta,
+                r.gamma,
+                r.theta,
+                r.vega,
+                r.volume,
+            ])
+            yield buf.getvalue()
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
 
 @app.route('/download/today')
 def download_today():
     session = get_session()
-    try:
-        today_start = datetime.now(timezone.utc).replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
-        records = session.query(OptionGreeks).filter(
-            OptionGreeks.timestamp >= today_start
-        ).order_by(OptionGreeks.timestamp).all()
-        
-        csv_data = generate_csv(records)
-        filename = f"greeks_today_{date.today().isoformat()}.csv"
-        
-        return Response(
-            csv_data,
-            mimetype='text/csv',
-            headers={'Content-Disposition': f'attachment; filename={filename}'}
-        )
-    finally:
-        session.close()
+    today_start = datetime.now(timezone.utc).replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
+    query = session.query(OptionGreeks).filter(
+        OptionGreeks.timestamp >= today_start
+    ).order_by(OptionGreeks.timestamp)
+    return stream_csv(query, f"greeks_today_{date.today().isoformat()}.csv")
 
 @app.route('/download/yesterday')
 def download_yesterday():
     session = get_session()
-    try:
-        yesterday = date.today() - timedelta(days=1)
-        yesterday_start = datetime.combine(yesterday, datetime.min.time())
-        yesterday_end = datetime.combine(yesterday, datetime.max.time())
-        
-        records = session.query(OptionGreeks).filter(
-            OptionGreeks.timestamp >= yesterday_start,
-            OptionGreeks.timestamp <= yesterday_end
-        ).order_by(OptionGreeks.timestamp).all()
-        
-        csv_data = generate_csv(records)
-        filename = f"greeks_{yesterday.isoformat()}.csv"
-        
-        return Response(
-            csv_data,
-            mimetype='text/csv',
-            headers={'Content-Disposition': f'attachment; filename={filename}'}
-        )
-    finally:
-        session.close()
+    yesterday = date.today() - timedelta(days=1)
+    yesterday_start = datetime.combine(yesterday, datetime.min.time())
+    yesterday_end = datetime.combine(yesterday, datetime.max.time())
+    query = session.query(OptionGreeks).filter(
+        OptionGreeks.timestamp >= yesterday_start,
+        OptionGreeks.timestamp <= yesterday_end
+    ).order_by(OptionGreeks.timestamp)
+    return stream_csv(query, f"greeks_{yesterday.isoformat()}.csv")
 
 @app.route('/download/week')
 def download_week():
     session = get_session()
-    try:
-        week_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
-        records = session.query(OptionGreeks).filter(
-            OptionGreeks.timestamp >= week_ago
-        ).order_by(OptionGreeks.timestamp).all()
-        
-        csv_data = generate_csv(records)
-        filename = f"greeks_last_7_days_{date.today().isoformat()}.csv"
-        
-        return Response(
-            csv_data,
-            mimetype='text/csv',
-            headers={'Content-Disposition': f'attachment; filename={filename}'}
-        )
-    finally:
-        session.close()
+    week_ago = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
+    query = session.query(OptionGreeks).filter(
+        OptionGreeks.timestamp >= week_ago
+    ).order_by(OptionGreeks.timestamp)
+    return stream_csv(query, f"greeks_last_7_days_{date.today().isoformat()}.csv")
 
 @app.route('/download/all')
 def download_all():
     session = get_session()
-    try:
-        records = session.query(OptionGreeks).order_by(OptionGreeks.timestamp).all()
-        
-        csv_data = generate_csv(records)
-        filename = f"greeks_all_data_{date.today().isoformat()}.csv"
-        
-        return Response(
-            csv_data,
-            mimetype='text/csv',
-            headers={'Content-Disposition': f'attachment; filename={filename}'}
-        )
-    finally:
-        session.close()
+    query = session.query(OptionGreeks).order_by(OptionGreeks.timestamp)
+    return stream_csv(query, f"greeks_all_data_{date.today().isoformat()}.csv")
 
 @app.route('/download/custom')
 def download_custom():
     session = get_session()
+    underlying = request.args.get('underlying', 'ALL')
+    from_date = request.args.get('from_date', date.today().isoformat())
+    to_date = request.args.get('to_date', date.today().isoformat())
+
     try:
-        underlying = request.args.get('underlying', 'ALL')
-        from_date = request.args.get('from_date', date.today().isoformat())
-        to_date = request.args.get('to_date', date.today().isoformat())
-        
         from_dt = datetime.fromisoformat(from_date)
         to_dt = datetime.fromisoformat(to_date).replace(hour=23, minute=59, second=59)
-        
-        query = session.query(OptionGreeks).filter(
-            OptionGreeks.timestamp >= from_dt,
-            OptionGreeks.timestamp <= to_dt
-        )
-        
-        if underlying != 'ALL':
-            query = query.filter(OptionGreeks.underlying == underlying)
-        
-        records = query.order_by(OptionGreeks.timestamp).all()
-        
-        csv_data = generate_csv(records)
-        filename = f"greeks_{underlying}_{from_date}_to_{to_date}.csv"
-        
-        return Response(
-            csv_data,
-            mimetype='text/csv',
-            headers={'Content-Disposition': f'attachment; filename={filename}'}
-        )
-    finally:
-        session.close()
+    except ValueError:
+        return "Invalid date format", 400
+
+    query = session.query(OptionGreeks).filter(
+        OptionGreeks.timestamp >= from_dt,
+        OptionGreeks.timestamp <= to_dt
+    )
+    if underlying != 'ALL':
+        query = query.filter(OptionGreeks.underlying == underlying)
+    query = query.order_by(OptionGreeks.timestamp)
+
+    filename = f"greeks_{underlying}_{from_date}_to_{to_date}.csv"
+    return stream_csv(query, filename)
 
 @app.route('/api/health')
 def health():
